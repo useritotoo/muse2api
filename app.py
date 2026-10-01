@@ -402,9 +402,6 @@ def build_image_prompt(r: ImageRequest) -> str:
     elif r.size:
         parts.append(f"尺寸/比例：{r.size}")
 
-    if has_ref:
-        parts.append("【纯净画面要求】：彻底清除并去除参考图中的所有文字、水印、签名、角标及Logo标记（clean image without any watermark, text, or logo），输出绝对纯净无字画面")
-
     if r.extra:
         parts.append(r.extra)
     return "，".join(parts)
