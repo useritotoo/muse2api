@@ -1926,7 +1926,12 @@ def get_keepalive_status(_=Depends(auth)):
 
 
 # ------------------------- 仓库实时更新检测、通知与一键在线升级 -------------------------
-REPO_URL = "https://github.com/czg86389-hub/muse2api"
+# 一键更新必须跟随当前仓库。指回上游时，上游一有新提交就会弹出升级，
+# 并在升级时用上游代码覆盖本仓库已经改过的文件。
+REPO_OWNER = "useritotoo"
+REPO_NAME = "muse2api"
+REPO_SLUG = f"{REPO_OWNER}/{REPO_NAME}"
+REPO_URL = f"https://github.com/{REPO_SLUG}"
 TRACKED_REPO_PATHS = [
     "app.py", "engine.py", "store.py", "cdp.py", "config.py",
     "admin.html", "README.md", "version.json", "requirements.txt",
@@ -1983,9 +1988,12 @@ def _git(args: list[str], timeout: int = 30):
 
 
 def _ensure_git_repo(token: str = ""):
-    """确保 BASE_DIR 已初始化为绑定 czg86389-hub/muse2api 的 Git 仓库。"""
+    """确保 BASE_DIR 已初始化为绑定当前仓库 (useritotoo/muse2api) 的 Git 仓库。"""
     git_dir = os.path.join(BASE_DIR, ".git")
-    remote_url = f"https://x-access-token:{token}@github.com/czg86389-hub/muse2api.git" if token else f"{REPO_URL}.git"
+    remote_url = (
+        f"https://x-access-token:{token}@github.com/{REPO_SLUG}.git"
+        if token else f"{REPO_URL}.git"
+    )
     if not os.path.isdir(git_dir):
         _git(["init", "-b", "main"])
         _git(["remote", "add", "origin", remote_url])
@@ -1993,12 +2001,12 @@ def _ensure_git_repo(token: str = ""):
         _git(["reset", "--mixed", "origin/main"])
     else:
         _git(["remote", "set-url", "origin", remote_url])
-    _git(["config", "user.name", "czg86389-hub"])
-    _git(["config", "user.email", "czg86389-hub@users.noreply.github.com"])
+    _git(["config", "user.name", REPO_OWNER])
+    _git(["config", "user.email", f"{REPO_OWNER}@users.noreply.github.com"])
 
 
 def _check_update_sync(force: bool = False) -> dict:
-    """检测 GitHub 官方仓库 (czg86389-hub/muse2api) 是否有新版本或新提交。
+    """检测当前仓库 (useritotoo/muse2api) 是否有新版本或新提交。
     默认缓存 90 秒，防止频繁刷新触发 GitHub API 速率限制。"""
     now = time.time()
     if not force and _UPDATE_CACHE["data"] and (now - _UPDATE_CACHE["ts"]) < 90:
@@ -2035,7 +2043,7 @@ def _check_update_sync(force: bool = False) -> dict:
     highlights = list(local_ver_obj.get("highlights") or [])
     try:
         rv = requests.get(
-            f"https://raw.githubusercontent.com/czg86389-hub/muse2api/main/version.json?t={int(now)}",
+            f"https://raw.githubusercontent.com/{REPO_SLUG}/main/version.json?t={int(now)}",
             timeout=6,
         )
         if rv.status_code == 200:
@@ -2054,7 +2062,7 @@ def _check_update_sync(force: bool = False) -> dict:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         resp = requests.get(
-            "https://api.github.com/repos/czg86389-hub/muse2api/commits?sha=main&per_page=5",
+            f"https://api.github.com/repos/{REPO_SLUG}/commits?sha=main&per_page=5",
             headers=headers,
             timeout=6,
         )
@@ -2134,7 +2142,7 @@ def _upgrade_from_github_sync() -> dict:
 
     if not upgraded_via:
         resp = requests.get(
-            "https://codeload.github.com/czg86389-hub/muse2api/tar.gz/refs/heads/main",
+            f"https://codeload.github.com/{REPO_SLUG}/tar.gz/refs/heads/main",
             timeout=60,
         )
         if resp.status_code != 200:
@@ -2181,14 +2189,14 @@ def _upgrade_from_github_sync() -> dict:
 @app.get("/admin/update/check")
 @app.get("/admin/repo/status")
 async def admin_check_update(force: bool = False):
-    """供所有已部署节点实时检测 GitHub 官方仓库是否有新版本更新。"""
+    """供已部署节点检测当前仓库是否有新版本更新。"""
     return await asyncio.to_thread(_check_update_sync, force)
 
 
 @app.post("/admin/update/upgrade")
 @app.post("/admin/repo/pull")
 async def admin_upgrade_now(payload: dict = Body(default={}), _=Depends(auth)):
-    """一键从 GitHub 官方仓库拉取最新更新并自动平滑重启服务。"""
+    """一键从当前仓库拉取最新更新并自动平滑重启服务。"""
     res = await asyncio.to_thread(_upgrade_from_github_sync)
     restart = payload.get("restart", True) if isinstance(payload, dict) else True
     if restart:
