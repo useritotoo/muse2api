@@ -111,6 +111,12 @@ class Config:
     tool_protocol: bool = field(
         default_factory=lambda: _env("MUSE2API_TOOL_PROTOCOL", "0").strip() != "0")
 
+    # 保活设置：是否对已禁用的账号执行自动保活，**默认关闭**。
+    # 开启后，被管理员在后台手动禁用的账号仍会由后台守护进程执行自动保活与 VM 唤醒，
+    # 保持会话活性不失效，但依然不会参与正常业务生图、生视频与对话轮转调度。
+    keepalive_disabled_accounts: bool = field(
+        default_factory=lambda: _env("MUSE2API_KEEPALIVE_DISABLED_ACCOUNTS", "0").strip() != "0")
+
     @property
     def data_dir(self) -> str:
         return os.path.join(self.base_dir, "data")

@@ -65,6 +65,8 @@
    # 按需编辑 .env，建议修改 MUSE2API_KEY 为你自己的管理密钥
    ```
 
+   Docker Compose 会读取 `.env` 中的 `MUSE2API_KEY`，不会再被 Compose 文件中的示例值覆盖。
+
 3. **启动容器**：
    ```bash
    docker compose up -d
@@ -115,8 +117,9 @@
 
 ---
 
-## 🧩 Chrome 扩展导号（零门槛）
+## 🧩 账号导入（Chrome 扩展 / 油猴脚本）
 
+### 方式 A：Chrome / Edge 扩展
 项目内置了专用 Chrome 导号扩展（目录位于 `extension/`），告别复杂的 F12 Cookie 提取：
 
 1. 打开 Chrome / Edge 浏览器，访问 `chrome://extensions`，开启右上角的 **「开发者模式」**。
@@ -124,6 +127,12 @@
 3. 在该浏览器中登录 [muse.ai](https://muse.ai/) 至聊天主界面。
 4. 点击浏览器右上角插件图标，填入你的服务地址（例如 `http://1.2.3.4:18610`）和 `MUSE2API_KEY`。
 5. 点击 **「读取并导入」**，秒级同步入库！
+
+### 方式 B：Tampermonkey 油猴脚本（跨浏览器免安装扩展）
+对于不想开启开发者模式或使用 Firefox / Safari 的用户，提供了油猴脚本（位于 `tools/muse2api_cookie_importer.user.js`）：
+1. 在浏览器安装 Tampermonkey 插件。
+2. 新建脚本并将 `tools/muse2api_cookie_importer.user.js` 内容复制粘贴保存。
+3. 打开 [muse.ai](https://muse.ai/) 网页，右下角将出现 **「⚡ 导入到 muse2api」** 悬浮按钮，右键即可配置服务地址与 Key，左键一键推送入库并自动复制剪贴板兜底。
 
 ---
 
@@ -240,6 +249,17 @@ curl -X POST "http://localhost:18610/v1/images/generations" \
 本项目已链接并高度认可 **[LINUX DO 社区](https://linux.do/)**，感谢社区佬友的交流、反馈与支持：
 
 - 🌐 **[LINUX DO 社区 (https://linux.do/)](https://linux.do/)** —— 新的理想型社区（真诚、友善、团结、专业，共建你我引以为荣之社区）
+
+---
+
+## 👥 贡献者致谢 (Contributors)
+
+感谢以下开发者对 MUSE2API 的代码贡献与功能优化（按 PR 合入顺序排列）：
+
+- 🌟 **[@cpt-kenvie](https://github.com/cpt-kenvie)** (PR [#2](https://github.com/czg86389-hub/muse2api/pull/2)) —— 修复 Docker Compose 读取 `.env` 环境变量与示例配置覆盖问题
+- 🌟 **[@CarloCPP](https://github.com/CarloCPP)** (PR [#6](https://github.com/czg86389-hub/muse2api/pull/6)) —— 贡献 Tampermonkey 油猴一键导号脚本及已禁用账号自动保活配置
+
+欢迎大家提交 PR 与 Issue，共同把项目打磨得更强更好用！
 
 ---
 

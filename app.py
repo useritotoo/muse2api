@@ -1110,6 +1110,22 @@ def _want_usage(stream_options) -> bool:
     return False
 
 
+def _pace_text(text: str, chunk_size: int = 2, delay: float = 0.012):
+    """把大块文本平滑切分为仿原生 LLM 打字机的微流式 Token。
+    若传入文本本身微小（<= 3 字），直接秒级放行，零延迟；
+    若传入文本是大块（如 DOM 批量刷新），按每 chunk_size 字间隔 delay 平滑输出。
+    """
+    if not text:
+        return
+    if len(text) <= 3 or delay <= 0:
+        yield text
+        return
+    for i in range(0, len(text), chunk_size):
+        yield text[i:i + chunk_size]
+        if i + chunk_size < len(text):
+            time.sleep(delay)
+
+
 _SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     "X-Accel-Buffering": "no",
@@ -1166,16 +1182,21 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
     if req.stream:
         def sync_stream():
             try:
+                # 握手建立瞬间立即发送 role: assistant 首包，让下游客户端秒级捕获光标
+                yield _sse(_chat_chunk(cid, created, model, {"role": "assistant"}))
+
                 stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id)
                 if not tool_note:
                     for chunk in stream_gen:
-                        yield _sse(_chat_chunk(cid, created, model, {"content": chunk}))
+                        for piece in _pace_text(chunk):
+                            yield _sse(_chat_chunk(cid, created, model, {"content": piece}))
                     yield _sse(_chat_chunk(cid, created, model, {}, finish="stop"))
                 else:
                     buf, mode = "", None
                     for chunk in stream_gen:
                         if mode == "text":
-                            yield _sse(_chat_chunk(cid, created, model, {"content": chunk}))
+                            for piece in _pace_text(chunk):
+                                yield _sse(_chat_chunk(cid, created, model, {"content": piece}))
                             continue
                         buf += chunk
                         if mode is None:
@@ -1185,7 +1206,8 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                                     mode = "maybe_tool"
                                 else:
                                     mode = "text"
-                                    yield _sse(_chat_chunk(cid, created, model, {"content": buf}))
+                                    for piece in _pace_text(buf):
+                                        yield _sse(_chat_chunk(cid, created, model, {"content": piece}))
                                     buf = ""
                     if mode == "text":
                         yield _sse(_chat_chunk(cid, created, model, {}, finish="stop"))
@@ -1193,13 +1215,15 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                         calls, rest = parse_tool_calls(buf)
                         if calls:
                             if rest:
-                                yield _sse(_chat_chunk(cid, created, model, {"content": rest}))
+                                for piece in _pace_text(rest):
+                                    yield _sse(_chat_chunk(cid, created, model, {"content": piece}))
                             for piece in tool_call_deltas(calls):
                                 yield _sse(_chat_chunk(cid, created, model, {"tool_calls": piece}))
                             yield _sse(_chat_chunk(cid, created, model, {}, finish="tool_calls"))
                         else:
                             if buf:
-                                yield _sse(_chat_chunk(cid, created, model, {"content": buf}))
+                                for piece in _pace_text(buf):
+                                    yield _sse(_chat_chunk(cid, created, model, {"content": piece}))
                             yield _sse(_chat_chunk(cid, created, model, {}, finish="stop"))
                 if _want_usage(req.stream_options):
                     yield _sse({"id": cid, "object": "chat.completion.chunk",
@@ -1803,7 +1827,8 @@ async def run_keepalive_all(force: bool = False) -> dict:
         skipped = []
 
         try:
-            accounts = [a for a in store.list_accounts() if a.get("enabled", True)]
+            include_disabled = getattr(CFG, "keepalive_disabled_accounts", False)
+            accounts = [a for a in store.list_accounts() if include_disabled or a.get("enabled", True)]
             for a in accounts:
                 aid = a["id"]
                 label = a.get("label", aid)

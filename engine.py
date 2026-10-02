@@ -297,14 +297,15 @@ class MuseEngine:
                     var b = d.querySelector('button[aria-label*="close" i], button');
                     if (b) b.click();
                 }
-                var bubbleCount = document.querySelectorAll('div[class*="hatch-chat-groupable-bubble"]').length;
+                var scope = document.querySelector('main,[class*="chat-scroll"],[class*="hatch-chat-scroll"]') || document.body;
+                var bubbleCount = scope ? scope.querySelectorAll('div[class*="hatch-chat-groupable-bubble"]').length : 0;
                 var hasAtts = document.querySelectorAll('[data-testid^="hatch-chat-attachment-presentation-"]').length > 0;
                 var hasStop = !!document.querySelector('button[aria-label*="Stop" i]');
                 var bodyTxt = document.body ? (document.body.innerText || '') : '';
                 var hasStuck = bodyTxt.indexOf('Still sending') !== -1 || bodyTxt.indexOf('Connecting...') !== -1;
                 if (hasStop || hasStuck || hasAtts) return true;
                 if (forChat) {
-                    return bubbleCount >= 16;
+                    return bubbleCount >= 24;
                 }
                 return (window.location.pathname !== '/thread/new') || bubbleCount > 0;
             })(%s)""" % ("true" if for_chat else "false"))
@@ -792,11 +793,13 @@ class MuseEngine:
         "return (s.overflowY==='auto'||s.overflowY==='scroll')&&e.scrollHeight>e.clientHeight+100;});"
         "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight;});"
         "if(els[0])els[0].scrollTop=els[0].scrollHeight;"
-        "var bs=[].slice.call(document.querySelectorAll('div[class*=\"hatch-chat-groupable-bubble\"]'))"
+        "var scope=document.querySelector('main,[class*=\"chat-scroll\"],[class*=\"hatch-chat-scroll\"]')||document.body;"
+        "var bs=[].slice.call(scope.querySelectorAll('div[class*=\"hatch-chat-groupable-bubble\"]'))"
         ".filter(function(b){return /hatch-agent-bubble-bg/.test(b.className||'');});"
-        "var txt=bs.length?(bs[bs.length-1].innerText||'').trim():'';"
+        "var nonEmpty=bs.filter(function(b){return ((b.innerText||'').trim().length)>0;});"
+        "var txt=nonEmpty.length?(nonEmpty[nonEmpty.length-1].innerText||'').trim():'';"
         "var stop=!!document.querySelector('button[aria-label*=\"Stop\" i]');"
-        "return JSON.stringify({cnt:bs.length,txt:txt,stop:stop});})()"
+        "return JSON.stringify({cnt:nonEmpty.length,total:bs.length,txt:txt,stop:stop});})()"
     )
 
     def _agent_text(self) -> str:
@@ -840,41 +843,46 @@ class MuseEngine:
 
         t_sent = time.time()
         deadline = t_sent + timeout
-        first_token_deadline = min(deadline, t_sent + 30.0)
+        first_token_deadline = min(deadline, t_sent + 40.0)
+        sent, last, stable = "", None, 0
         got_first = False
 
-        # 等新回复出现：单次 CDP 轮询合并滚动+气泡检测，80ms 极速响应
+        # 1. 等待助手生成并开始吐字（高频 60ms 采样，捕获到首批增量文字瞬间 yield 出去）
         while time.time() < first_token_deadline:
             if stop_event is not None and stop_event.is_set():
                 return
-            time.sleep(0.08)
-            cnt, cur, _ = self._poll_chat()
-            if cnt > base_agent and cur:
+            time.sleep(0.06)
+            cnt, cur, has_stop = self._poll_chat()
+            if not cur or (cnt <= base_agent and cur == base_text):
+                if time.time() - t_sent > 14.0:
+                    try:
+                        tail = self.page.js("document.body.innerText.slice(-500)") or ""
+                    except Exception:
+                        tail = ""
+                    if "Still sending" in tail or "Connecting..." in tail:
+                        raise MuseGenerationError("云端 VM 连接超时 (Still sending)")
+                continue
+
+            delta = cur[len(sent):] if cur.startswith(sent) else cur
+            if delta:
+                sent = cur
+                yield delta
+                last = cur
                 got_first = True
                 break
-            if cur and cur != base_text:
-                got_first = True
-                break
-            if time.time() - t_sent > 12.0:
-                try:
-                    tail = self.page.js("document.body.innerText.slice(-500)") or ""
-                except Exception:
-                    tail = ""
-                if "Still sending" in tail or "Connecting..." in tail:
-                    raise MuseGenerationError("云端 VM 连接超时 (Still sending)")
 
         if not got_first:
             raise MuseGenerationError("等待助手首字响应超时")
 
-        # 流式输出增量文本：当无 Stop 按钮且文本连续 3 次（~0.3s）稳定即立刻结束，消除尾部 1.2s 卡顿
-        sent, last, stable = "", None, 0
+        # 2. 持续捕获增量文本
         while time.time() < deadline:
             if stop_event is not None and stop_event.is_set():
                 return
-            time.sleep(0.10)
+            time.sleep(0.06)
             cnt, cur, has_stop = self._poll_chat()
-            if not cur or (cnt <= base_agent and cur == base_text):
+            if not cur:
                 continue
+
             if cur != last:
                 delta = cur[len(sent):] if cur.startswith(sent) else cur
                 if delta:
@@ -883,8 +891,13 @@ class MuseEngine:
                 last, stable = cur, 0
             else:
                 stable += 1
-                if (not has_stop and stable >= 3) or stable >= 7:
+                # Stop 按钮消失说明前端生成彻底结束，连续 3 次（约 0.18s）无新文本即正常退出
+                if not has_stop and stable >= 3:
                     return
+                # Stop 按钮仍在时绝不过早截断（模型思考、代码块或网络抖动），允许等待至 stable >= 80（约 5s）防卡死
+                if has_stop and stable >= 80:
+                    return
+
         raise MuseGenerationError("等待助手回复超时")
 
     def chat(self, cookies: dict, prompt: str, expires: dict | None = None,
