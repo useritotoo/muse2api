@@ -1417,7 +1417,7 @@ def admin_status(_=Depends(auth)):
         if os.path.isdir(CFG.media_dir) else 0,
         "browser_running": bool(engine.proc and engine.proc.poll() is None),
         "essential_cookies": list(ESSENTIAL_COOKIES),
-        "base_url": f"{base}/v1",
+        "base_url": f"{base}/v1" if base else "",
         "config": {"site": CFG.site_url, "cdp_port": CFG.cdp_port,
                    "image_timeout": CFG.image_timeout,
                    "video_timeout": CFG.video_timeout,
