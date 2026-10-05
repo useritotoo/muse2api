@@ -1432,6 +1432,21 @@ def list_accounts(_=Depends(auth)):
     return {"accounts": store.list_accounts(), "stats": store.stats()}
 
 
+@app.get("/admin/accounts/{aid}")
+def get_account_detail(aid: str, _=Depends(auth)):
+    """返回单个账号的完整记录，含 cookie。列表接口继续隐藏 cookie。"""
+    acc = store.get_account(aid)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    cookies = {k: v for k, v in (acc.get("cookies") or {}).items() if v}
+    item = {k: v for k, v in acc.items() if k != "cookies"}
+    item["cookies"] = cookies
+    item["cookie_count"] = len(cookies)
+    item["cookie_header"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    item["essential_ok"] = all(cookies.get(name) for name in ESSENTIAL_COOKIES)
+    return item
+
+
 @app.post("/admin/accounts")
 def add_account(req: AccountRequest, _=Depends(auth)):
     added: list[dict] = []
@@ -1497,12 +1512,12 @@ async def test_account(aid: str, _=Depends(auth)):
         with GEN_LOCK:
             try:
                 engine.start()
-                engine.refresh(acc["cookies"], acc.get("cookies_exp"))
+                engine.refresh(acc["cookies"], acc.get("cookies_exp"), account_id=aid)
                 synced = _sync_cookies(aid)
                 quota = None
                 try:  # 顺带刷新额度；读不到不影响测试结论
                     quota = engine.quota(acc["cookies"],
-                                         acc.get("cookies_exp"))
+                                         acc.get("cookies_exp"), account_id=aid)
                     quota["checked_at"] = int(time.time())
                     store.update_account(aid, quota=quota)
                 except Exception:  # noqa: BLE001
@@ -1557,7 +1572,7 @@ def relogin(_=Depends(auth)):
         raise HTTPException(400, "没有可用账号")
     try:
         engine.start()
-        engine.refresh(acc["cookies"], acc.get("cookies_exp"))
+        engine.refresh(acc["cookies"], acc.get("cookies_exp"), account_id=acc["id"])
         return {"ok": True, "account": acc["id"]}
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
@@ -1581,7 +1596,7 @@ async def query_quota(aid: str, _=Depends(auth)):
     def _probe():
         with GEN_LOCK:
             engine.start()
-            q = engine.quota(acc["cookies"], acc.get("cookies_exp"))
+            q = engine.quota(acc["cookies"], acc.get("cookies_exp"), account_id=aid)
             q["checked_at"] = int(time.time())
             store.update_account(aid, quota=q)
             return q
@@ -1791,7 +1806,7 @@ def _probe_account_sync(aid: str, check_quota: bool = False) -> dict:
         if check_quota and GEN_LOCK.acquire(blocking=False):
             try:
                 engine.start()
-                quota = engine.quota(res["cookies"], res["cookies_exp"])
+                quota = engine.quota(res["cookies"], res["cookies_exp"], account_id=aid)
                 quota["checked_at"] = int(time.time())
                 store.update_account(aid, quota=quota)
             except Exception as qe:  # noqa: BLE001

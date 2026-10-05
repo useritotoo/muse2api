@@ -328,7 +328,12 @@ class MuseEngine:
             pass
 
     def ensure_page(self, cookies: dict, expires: dict | None = None, account_id: str | None = None):
-        if self.page is not None and (account_id is None or getattr(self, "current_acc_id", None) == account_id):
+        # 已绑定账号的页面只能复用给同一个账号。account_id 为空时若仍复用，
+        # 额度查询会把当前标签页的 Usage 写到别的账号上。
+        bound = getattr(self, "current_acc_id", None)
+        same_account = account_id is not None and bound == account_id
+        anonymous = account_id is None and bound is None
+        if self.page is not None and (same_account or anonymous):
             try:
                 if self.page.js("!!document.querySelector('textarea')"):
                     return self.page
@@ -392,11 +397,12 @@ class MuseEngine:
                                 "请用浏览器扩展重新导入 cookie")
         raise MuseGenerationError("muse.ai 页面加载超时（未出现聊天输入框），请检查服务器网络后重试；未确认会话失效")
 
-    def refresh(self, cookies: dict, expires: dict | None = None):
+    def refresh(self, cookies: dict, expires: dict | None = None, account_id: str | None = None):
         if self.page:
             self.page.close()
             self.page = None
-        return self.ensure_page(cookies, expires)
+            self.current_acc_id = None
+        return self.ensure_page(cookies, expires, account_id=account_id)
 
     # ---------------- 额度查询（Settings 面板） ----------------
     # muse.ai 的额度在底部 Settings 菜单 → Settings 项 → 设置面板的
@@ -419,9 +425,14 @@ class MuseEngine:
         "return JSON.stringify({x:Math.round(r.x+r.width/2),"
         "y:Math.round(r.y+r.height/2)});})()")
 
-    def quota(self, cookies: dict, expires: dict | None = None) -> dict:
-        """打开 Settings 面板读额度。返回结构化 dict；读不到时 raise。"""
-        self.ensure_page(cookies, expires)
+    def quota(self, cookies: dict, expires: dict | None = None,
+              account_id: str | None = None) -> dict:
+        """打开 Settings 面板读额度。返回结构化 dict；读不到时 raise。
+
+        必须带 account_id。否则 ensure_page 会沿用当前标签页，
+        把别的账号的周用量和 Additional tokens 记到这个账号上。
+        """
+        self.ensure_page(cookies, expires, account_id=account_id)
         p = self.page
         time.sleep(1)
 

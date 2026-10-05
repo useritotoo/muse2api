@@ -181,6 +181,21 @@
   .keybox.ok .lbl{color:var(--ok)}
   .keybox.miss .lbl{color:var(--warn)}
   .updpill-alert{border-color:rgba(251,191,36,.8)!important;background:rgba(251,191,36,.15)!important;color:var(--warn)!important;animation:pulse 1.6s infinite}
+
+  /* ---------- 页内对话框 ---------- */
+  .modal{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;padding:22px}
+  .modal.show{display:flex}
+  .modal-back{position:absolute;inset:0;background:rgba(4,8,16,.72);backdrop-filter:blur(3px)}
+  .modal-card{
+    position:relative;z-index:1;width:min(680px,100%);max-height:min(86vh,860px);overflow:auto;
+    background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%);
+    border:1px solid var(--line2);border-radius:14px;padding:18px 18px 16px;
+    box-shadow:0 24px 70px rgba(0,0,0,.55)
+  }
+  .modal-h{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+  .modal-h h3{margin:0;font-size:15px;flex:1}
+  .modal-f{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+  #modalArea{min-height:180px}
 </style>
 </head>
 <body>
@@ -666,6 +681,7 @@ t = requests.post(<span class="s">"BASE/v1/videos"</span>, json={<span class="s"
         <tbody>
           <tr><td class="mono">GET</td><td class="mono">/admin/status</td><td>服务总览 + 账号池 + 最近任务</td></tr>
           <tr><td class="mono">GET</td><td class="mono">/admin/accounts</td><td>账号列表</td></tr>
+          <tr><td class="mono">GET</td><td class="mono">/admin/accounts/{id}</td><td>查看单个账号（含 cookie）</td></tr>
           <tr><td class="mono">POST</td><td class="mono">/admin/accounts</td><td>添加账号（单条 / batch 批量文本）</td></tr>
           <tr><td class="mono">PATCH</td><td class="mono">/admin/accounts/{id}</td><td>改标签 / 启用禁用</td></tr>
           <tr><td class="mono">DELETE</td><td class="mono">/admin/accounts/{id}</td><td>删除账号</td></tr>
@@ -736,6 +752,27 @@ t = requests.post(<span class="s">"BASE/v1/videos"</span>, json={<span class="s"
   <span style="margin:0 10px">·</span>
   <span>社区认可与友情链接：<a href="https://linux.do/" target="_blank" style="color:var(--acc);text-decoration:none;font-weight:600">LINUX DO 社区 (https://linux.do/)</a></span>
 </footer>
+
+<div id="modal" class="modal" role="presentation">
+  <div class="modal-back" onclick="closeModal()"></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-h">
+      <h3 id="modalTitle">账号</h3>
+      <button type="button" class="ghost mini" onclick="closeModal()">关闭</button>
+    </div>
+    <p class="hint" id="modalHint"></p>
+    <div id="modalField">
+      <label id="modalLabel" for="modalInput">内容</label>
+      <input id="modalInput" type="text" autocomplete="off">
+      <textarea id="modalArea" rows="12" spellcheck="false" hidden></textarea>
+    </div>
+    <div class="modal-f">
+      <button type="button" class="ghost" id="modalCopy" hidden onclick="copyModal()">复制</button>
+      <button type="button" class="ghost" id="modalCancel" onclick="closeModal()">取消</button>
+      <button type="button" id="modalOk" onclick="submitModal()">保存</button>
+    </div>
+  </div>
+</div>
 
 <div id="toasts"></div>
 
@@ -1058,8 +1095,9 @@ async function loadPool(){
           <button class="ghost mini" onclick="keepaliveOne('${a.id}')" title="静默刷新会话令牌与有效期">保活</button>
           <button class="ghost mini" onclick="queryQuota('${a.id}', this)">额度</button>
           <button class="ghost mini" onclick="toggleAcc('${a.id}', ${!a.enabled})">${a.enabled ? '禁用' : '启用'}</button>
-          <button class="ghost mini" onclick="renameAcc('${a.id}','${esc(a.label)}')">改名</button>
+          <button class="ghost mini" onclick="renameAcc('${a.id}')">改名</button>
           <button class="ghost mini" onclick="updateCookies('${a.id}')">更新Cookie</button>
+          <button class="ghost mini" onclick="viewAcc('${a.id}')">查看</button>
           <button class="danger mini" onclick="delAcc('${a.id}','${esc(a.label)}')">删除</button>
         </div></td>
       </tr>`;
@@ -1131,22 +1169,172 @@ async function toggleAcc(id, enabled){
   }catch(e){ toast('操作失败：' + e.message, 'bad'); }
 }
 
-async function renameAcc(id, old){
-  const label = prompt('新的账号标签：', old);
-  if (label === null || !label.trim()) return;
-  try{
-    await api(`/admin/accounts/${id}`, {method:'PATCH', body: JSON.stringify({label: label.trim()})});
-    toast('标签已更新', 'ok'); loadPool();
-  }catch(e){ toast('改名失败：' + e.message, 'bad'); }
+let _modalOnOk = null;
+let _modalLoad = null;
+
+function openModal(opts){
+  opts = opts || {};
+  $('modalTitle').textContent = opts.title || '';
+  $('modalHint').textContent = opts.hint || '';
+  $('modalHint').style.display = opts.hint ? '' : 'none';
+  const field = opts.field || null;
+  $('modalField').hidden = !field;
+  const input = $('modalInput');
+  const area = $('modalArea');
+  if (field){
+    const multiline = !!field.multiline;
+    $('modalLabel').textContent = field.label || '';
+    $('modalLabel').htmlFor = multiline ? 'modalArea' : 'modalInput';
+    input.hidden = multiline;
+    area.hidden = !multiline;
+    const box = multiline ? area : input;
+    box.readOnly = !!field.readonly;
+    box.value = field.value || '';
+    if (multiline) area.rows = field.rows || 12;
+  }
+  const ok = $('modalOk');
+  ok.hidden = !opts.okText;
+  ok.textContent = opts.okText || '保存';
+  ok.disabled = false;
+  $('modalCancel').hidden = !opts.okText;
+  $('modalCopy').hidden = !opts.copy;
+  _modalOnOk = opts.onOk || null;
+  $('modal').classList.add('show');
+  if (field && !field.readonly){
+    const box = field.multiline ? area : input;
+    setTimeout(() => { box.focus(); if (!field.multiline) box.select(); }, 30);
+  }
 }
 
-async function updateCookies(id){
-  const v = prompt('粘贴该账号最新的 Cookie 字符串：');
-  if (!v || !v.trim()) return;
+function closeModal(){
+  $('modal').classList.remove('show');
+  _modalOnOk = null;
+}
+
+async function submitModal(){
+  if (!_modalOnOk) return closeModal();
+  const fn = _modalOnOk;
+  const value = $('modalInput').hidden ? $('modalArea').value : $('modalInput').value;
+  const ok = $('modalOk');
+  ok.disabled = true;
   try{
-    const r = await api(`/admin/accounts/${id}/cookies`, {method:'POST', body: JSON.stringify({cookie_header: v.trim()})});
-    toast(`Cookie 已更新（${r.cookie_count} 条）`, 'ok'); loadPool();
-  }catch(e){ toast('更新失败：' + e.message, 'bad'); }
+    const keep = await fn(value);
+    if (keep !== false) closeModal();
+  }catch(e){
+    toast(e.message || '操作失败', 'bad');
+  }finally{
+    ok.disabled = false;
+  }
+}
+
+async function copyModal(){
+  const text = $('modalInput').hidden ? $('modalArea').value : $('modalInput').value;
+  try{
+    await navigator.clipboard.writeText(text);
+    toast('已复制到剪贴板', 'ok');
+  }catch(e){
+    const box = $('modalInput').hidden ? $('modalArea') : $('modalInput');
+    box.focus();
+    box.select();
+    toast('复制失败，请在编辑框里手动复制', 'warn');
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!$('modal').classList.contains('show')) return;
+  if (e.key === 'Escape'){ e.preventDefault(); closeModal(); }
+  if (e.key === 'Enter' && document.activeElement === $('modalInput')){
+    e.preventDefault();
+    submitModal();
+  }
+});
+
+function renameAcc(id){
+  const a = accounts.find(x => x.id === id);
+  if (!a) return;
+  openModal({
+    title: '修改账号标签',
+    hint: '只改列表里的显示名称，不会改动 Cookie 和会话。',
+    field: {label: '账号标签', value: a.label || ''},
+    okText: '保存',
+    onOk: async (label) => {
+      label = (label || '').trim();
+      if (!label){ toast('标签不能为空', 'warn'); return false; }
+      await api(`/admin/accounts/${id}`, {method:'PATCH', body: JSON.stringify({label})});
+      toast('标签已更新', 'ok');
+      loadPool();
+    }
+  });
+}
+
+function updateCookies(id){
+  const a = accounts.find(x => x.id === id);
+  openModal({
+    title: '更新 Cookie' + (a ? ' · ' + a.label : ''),
+    hint: '粘贴这个账号最新的 Cookie。支持 name=value; name=value，也支持每行一条。保存后会替换当前登录态。',
+    field: {label: 'Cookie', multiline: true, rows: 8, value: ''},
+    okText: '保存',
+    onOk: async (v) => {
+      if (!String(v || '').trim()){ toast('请先粘贴 Cookie', 'warn'); return false; }
+      const r = await api(`/admin/accounts/${id}/cookies`, {method:'POST', body: JSON.stringify({cookie_header: v.trim()})});
+      toast(`Cookie 已更新（${r.cookie_count} 条）`, 'ok');
+      loadPool();
+    }
+  });
+}
+
+function accountDump(a){
+  const cookies = a.cookies || {};
+  const exp = a.cookies_exp || {};
+  const status = a.ok === true ? '可用' : a.ok === false ? '异常' : '未检测';
+  const lines = [
+    '标签: ' + (a.label || ''),
+    'ID: ' + (a.id || ''),
+    '启用: ' + (a.enabled ? '是' : '否'),
+    '状态: ' + status,
+    '有效期: ' + (a.expires_at ? fmtTime(a.expires_at) : '未知'),
+    '最近使用: ' + (a.last_used ? fmtTime(a.last_used) : '—'),
+    '最近保活: ' + (a.last_keepalive ? fmtTime(a.last_keepalive) : '—'),
+    '备注: ' + (a.note || '—'),
+    'Cookie 条数: ' + (a.cookie_count != null ? a.cookie_count : Object.keys(cookies).length),
+    '',
+    'Cookie:',
+  ];
+  const names = Object.keys(cookies);
+  if (!names.length) lines.push('(空)');
+  names.forEach(name => {
+    const when = exp[name] ? '    到期 ' + fmtTime(exp[name]) : '';
+    lines.push(name + '=' + cookies[name] + when);
+  });
+  if (a.quota && a.quota.found){
+    lines.push('', '额度: ' + (a.quota.plan || '—')
+      + (a.quota.weekly_used_pct != null ? '，周用量 ' + a.quota.weekly_used_pct + '%' : '')
+      + (a.quota.extra_left ? '，额外 ' + a.quota.extra_left : ''));
+  }
+  return lines.join('\n');
+}
+
+async function viewAcc(id){
+  const known = accounts.find(x => x.id === id);
+  const token = {};
+  _modalLoad = token;
+  openModal({
+    title: '查看账号' + (known ? ' · ' + known.label : ''),
+    hint: '正在读取这个账号的数据…',
+    field: {label: '账号数据', multiline: true, rows: 16, value: '', readonly: true},
+    copy: true
+  });
+  try{
+    const a = await api('/admin/accounts/' + encodeURIComponent(id));
+    if (_modalLoad !== token || !$('modal').classList.contains('show')) return;
+    $('modalTitle').textContent = '查看账号 · ' + (a.label || a.id);
+    $('modalHint').textContent = '下面是当前保存在服务里的账号数据。编辑框只用于查看和复制，改 Cookie 请用「更新Cookie」。';
+    $('modalArea').value = accountDump(a);
+  }catch(e){
+    if (_modalLoad !== token || !$('modal').classList.contains('show')) return;
+    $('modalHint').textContent = '没有读到这个账号的数据。';
+    $('modalArea').value = e.message || '读取失败';
+  }
 }
 
 async function delAcc(id, label){
